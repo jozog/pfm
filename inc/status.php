@@ -16,6 +16,7 @@ function status(array &$pf, $date = 'now') {
 		'Money In' => [ '%12s', '%12.2f' ],
 		'Realized' => [ '%12s', '%12.2f' ],
 		'Unrealized' => [ '%12s', '%12.2f' ],
+		'Value' => [ '%12s', '%12.2f' ],
 	];
 
 	print_header($fmt);
@@ -71,6 +72,7 @@ function status(array &$pf, $date = 'now') {
 				100.0 * $a['unrealized'] / $a['value'], '%12.2f',
 				null, null, null, null, $a['unrealized']
 			),
+			'Value' => $a['value'],
 		]);
 	}
 
@@ -87,6 +89,7 @@ function status(array &$pf, $date = 'now') {
 			100.0 * $totals['unrealized'] / $totals['in'], '%12.2f',
 			null, null, null, null, $totals['unrealized']
 		),
+		'Value' => $totals['value'],
 	]);
 }
 
