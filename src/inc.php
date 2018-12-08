@@ -7,20 +7,23 @@
  * License, Version 2, as published by Sam Hocevar. See
  * http://sam.zoy.org/wtfpl/COPYING for more details. */
 
+assert_options(ASSERT_BAIL, true);
+
 require __DIR__.'/pfio.php';
 require __DIR__.'/line.php';
 require __DIR__.'/tx.php';
 require __DIR__.'/status.php';
 require __DIR__.'/quote.php';
-require __DIR__.'/plot.php';
+require __DIR__.'/gnuplot.php';
 require __DIR__.'/irr.php';
+require __DIR__.'/gnucash.php';
 
-function fatal(...$params) {
+function fatal(...$params): void {
 	fprintf(STDERR, ...$params);
 	die(1);
 }
 
-function notice(...$params) {
+function notice(...$params): void {
 	fprintf(STDERR, ...$params);
 }
 
@@ -31,15 +34,9 @@ function notice(...$params) {
  * negative integer, generate new data when cached data gets older than
  * $ttl seconds.
  */
-function get_cached_thing($id, $ttl, callable $generate) {
-	static $cachedir = null;
-
-	if($cachedir === null) {
-		$cachedir = getenv('XDG_CACHE_HOME');
-		if($cachedir === false) $cachedir = getenv('HOME').'/.cache';
-		$cachedir .= '/pfm';
-		if(!is_dir($cachedir)) mkdir($cachedir, 0700, true);
-	}
+function get_cached_thing(string $id, int $ttl, callable $generate) {
+	$cachedir = get_paths()['cache-home'];
+	if(!is_dir($cachedir)) mkdir($cachedir, 0700, true);
 
 	$f = $cachedir.'/'.$id;
 
@@ -49,14 +46,13 @@ function get_cached_thing($id, $ttl, callable $generate) {
 		}
 	}
 
-	fwrite(STDOUT, '.');
 	$data = $generate();
 	file_put_contents($f, json_encode($data));
 	touch($f, $ttl > 0 ? $ttl : time() - $ttl);
 	return $data;
 }
 
-function maybe_strtotime($dt, $now = null) {
+function maybe_strtotime(string $dt, ?int $now = null): int {
 	if(is_numeric($dt)) {
 		/* Assume absolute timestamp */
 		return (int)$dt;
@@ -124,14 +120,14 @@ function colorize_percentage($pc, $fmt = '%6.2f', $hi = null, $low = null, $negh
 	if($label === null) $label = $pc;
 
 	$out = $colorseqs['bold'];
-	
+
 	if($pc > $hi) $out .= $colorseqs['green'];
 	else if($pc > $low) $out .= $colorseqs['cyan'];
 	else if($pc < $neghi) $out .= $colorseqs['magenta'];
 	else if($pc < $neglow) $out .= $colorseqs['red'];
-	
+
 	$out .= sprintf($fmt, $label);
 	$out .= $colorseqs['reset'];
-	
+
 	return $out;
 }

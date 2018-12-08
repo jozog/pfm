@@ -7,21 +7,21 @@
  * License, Version 2, as published by Sam Hocevar. See
  * http://sam.zoy.org/wtfpl/COPYING for more details. */
 
-function irr(array $pf, $start, $end) {
+function irr(array &$pf, $start, $end) {
 	$start = maybe_strtotime($start);
 	$end = maybe_strtotime($end);
 
 	$flows = [ '__total__' => [] ];
-	
+
 	foreach(iterate_time($pf, $start, $end) as $ts => $data) {
 		$t = ($ts - $start) / ($end - $start);
-		
+
 		if($ts === $start || $ts === $end) {
 			$tval = 0.0;
 
 			foreach($data['agg'] as $ticker => $tdata) {
 				if(!$tdata['qty']) continue;
-				
+
 				$tval += $val = $tdata['qty'] * get_quote($pf, $ticker, $ts);
 				$flows[$ticker][] = [
 					$t,
@@ -33,20 +33,20 @@ function irr(array $pf, $start, $end) {
 				$t,
 				$ts === $start ? $tval : -$tval,
 			];
-			
+
 			continue;
 		}
 
 		$tdnav = 0;
 
-		foreach($data['delta'] as $tkr => $delta) {			
+		foreach($data['delta'] as $tkr => $delta) {
 			$tdnav += $dnav = $delta['in'] - $delta['out'] - $delta['realized'];
 
 			if($dnav) {
 				if(!isset($flows[$tkr])) {
 					$flows[$tkr] = [];
 				}
-				
+
 				$flows[$tkr][] = [ $t, $dnav ];
 			}
 		}
@@ -57,14 +57,14 @@ function irr(array $pf, $start, $end) {
 	}
 
 	foreach($flows as &$f) {
-		$c = count($f);	
+		$c = count($f);
 		assert($c >= 2);
 
 		--$c;
 
 		$t0 = $f[0][0];
 		$t1 = $f[$c][0];
-		
+
 		for($i = 1; $i < $c; ++$i) {
 			$f[$i][0] = ($f[$i][0] - $t0) / ($t1 - $t0);
 		}
@@ -72,6 +72,7 @@ function irr(array $pf, $start, $end) {
 		$f[0][0] = 0.0;
 		$f[$c][0] = 1.0;
 	}
+	unset($f);
 
 	$npv = function($r, $ticker) use($flows) {
 		$sum = 0.0;
@@ -84,31 +85,26 @@ function irr(array $pf, $start, $end) {
 	};
 
 	$ret = [];
-	
-	foreach($flows as $tkr => $f) {
-		$r0 = 1.0;
-		$npv0 = $npv($r0, $tkr);
 
-		if(abs($npv0) < 1e-5) {
-			$ret[$tkr] = $r0;
+	foreach($flows as $tkr => $f) {
+		if(count($f) == 2 && $f[0][1] < 1e-2 && $f[1][1] < 1e-2) {
+			$ret[$tkr] = 1.0;
 			continue;
 		}
-		
-		$r1 = 1.1;
-		$npv1 = $npv($r1, $tkr);
-	
-		while(abs($npv1) > 1e-5) {
-			/* Secant method, stolen from Wikipedia */
-			$newr = $r1 - $npv1 * ($r1 - $r0) / ($npv1 - $npv0);
-			$newnpv = $npv($newr, $tkr);
 
-			$r0 = $r1;
-			$npv0 = $npv1;
-			$r1 = $newr;
-			$npv1 = $newnpv;
+		$l = 0.0;
+		$u = 1000.0; /* XXX */
+
+		while($u - $l > 1e-5) {
+			$x = ($l + $u) * .5;
+			if($npv($x, $tkr) > 0) {
+				$u = $x;
+			} else {
+				$l = $x;
+			}
 		}
 
-		$ret[$tkr] = $r1;
+		$ret[$tkr] = $l;
 	}
 
 	return $ret;
