@@ -6,7 +6,7 @@ Released under the WTFPLv2 license.
 
 # Demo
 
-[![asciicast](https://asciinema.org/a/XYRN7O4hZe9nSgYFipeQ56tLe.svg)](https://asciinema.org/a/XYRN7O4hZe9nSgYFipeQ56tLe)
+[![asciicast](https://asciinema.org/a/s75fcKuiVPxxtfFV7K6bqN66h.svg)](https://asciinema.org/a/s75fcKuiVPxxtfFV7K6bqN66h)
 
 # Dependencies
 
@@ -29,7 +29,7 @@ Available commands:
 pfm [version]
 pfm help|h
 pfm status|s [at:<date>]
-pfm perf|p [at:<date>] [columns:default|days|weeks|months|years]
+pfm perf|p [type:irr|pnl] [at:<date>] [columns:default|days|weeks|months|years] [rows:all|open|ticker1,ticker2…] [sort:perf|weight|ticker]
 pfm add-line name:<name> ticker:<ticker> currency:<currency> isin:<ISIN>
 pfm rm-line ticker:<ticker>
 pfm edit-line ticker:<ticker> [<field1>:<newval1>] [<field2>:<newval2>]…
@@ -38,9 +38,11 @@ pfm add-tx ticker:<ticker> [sell:<quantity>|all] [buy:<quantity>] [price:<unit-p
 pfm rm-tx <txid>...
 pfm ls-tx [ticker:<ticker>] [before:<date>] [after:<date>]
 pfm get-quote ticker:<ticker> [at:<date>]
-pfm plot-perf [start:<date>] [end:<date>] [absolute:0|1] [raw:0|1]
-pfm plot-pf [start:<date>] [end:<date>] [absolute:0|1] [raw:0|1]
+pfm plot-gains [start:<date>] [end:<date>] [absolute:1|0]
+pfm plot-lines [start:<date>] [end:<date>] [absolute:1|0] [lines:all|none|ticker1,ticker2,…] [total:1|0] [benchmark:1|0]
 pfm quotes-to-gnucash <file.gnucash>
+pfm prune-history [tickers:<ticker>,…] [except:<ticker>,…] [from:<date>] [to:<date>]
+pfm set-benchmark [<ticker1>:<weight1>] [<ticker2>:<weight2>] …
 ~~~
 
 # About transactions
@@ -76,4 +78,15 @@ pfm add-tx ticker:FOO buy:0.1234 fee:-45.67 total:0
 
 # Management fee of €1.23
 pfm add-tx ticker:FOO sell:0.4567 fee:1.23 total:0
+~~~
+
+Stock splits or merges:
+
+~~~
+# Own 10 shares of FOO, has a 1:5 split
+pfm add-tx ticker:FOO buy:40 price:0 total:0
+
+# Own 100 shares of FOO, has a 1:7 split
+pfm add-tx ticker:FOO sell:2 price:12.34 fee:0
+pfm add-tx ticker:FOO sell:84 price:0 total:0
 ~~~

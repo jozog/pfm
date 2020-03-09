@@ -7,7 +7,7 @@
  * License, Version 2, as published by Sam Hocevar. See
  * http://sam.zoy.org/wtfpl/COPYING for more details. */
 
-function tsv_gains(array $pf, $stream, $start, $end) {
+function tsv_gains(array &$pf, $stream, $start, $end) {
 	$start = strtotime(date('Y-m-d', maybe_strtotime($start)));
 	$end = strtotime(date('Y-m-d', maybe_strtotime($end)));
 
@@ -28,7 +28,7 @@ function tsv_gains(array $pf, $stream, $start, $end) {
 	}
 }
 
-function plot_gains(array $pf, $start, $end, $absolute = true) {
+function plot_gains(array &$pf, $start, $end, $absolute = true) {
 	$dat = tempnam(sys_get_temp_dir(), 'pfm');
 	tsv_gains($pf, $datf = fopen($dat, 'wb'), $start, $end, $absolute);
 	fclose($datf);
@@ -52,7 +52,7 @@ function plot_gains(array $pf, $start, $end, $absolute = true) {
 		$dat,
 		$absolute ? "column('Basis')" : "100.0",
 		$absolute ? "column('Realized')" : "100.0 * column('Realized') / column('Basis')",
-		$absolute ? "column('Unrealized')" : "100.0 * column('Unrealized') / column('Basis')"
+		$absolute ? "column('Unrealized') + column('Basis')" : "100.0 + 100.0 * column('Unrealized') / column('Basis')"
 	);
 
 	fwrite($sf, "\n");
@@ -60,36 +60,40 @@ function plot_gains(array $pf, $start, $end, $absolute = true) {
 	unlink($dat);
 }
 
-function tsv_lines(array $pf, $out, $start, $end, &$used = null) {
+function tsv_lines(array &$pf, $out, $start, $end, &$used = null) {
 	$used = [];
 
 	fwrite($out, "Timestamp");
+
 	foreach($pf['lines'] as $tkr => $l) {
 		fprintf($out, "\ti%s\to%s\tn%s\tp%s", $tkr, $tkr, $tkr, $tkr);
 	}
-	fwrite($out, "\n");
+	fwrite($out, "\t__bench__\n");
 
 	foreach(iterate_time($pf, $start, $end) as $ts => $d) {
-		foreach([ $ts, strtotime('+1 day', $ts) - 1 ] as $t) {
-			fprintf($out, "%d", $t);
-			foreach($pf['lines'] as $tkr => $l) {
-				if(!isset($d['agg'][$tkr]) || !$d['agg'][$tkr]['qty']) {
-					$num = 0;
-					$quote = 0;
-				} else {
-					$used[$tkr] = true;
-					$num = $d['agg'][$tkr]['qty'];
-					$quote = get_quote($pf, $tkr, $ts);
-				}
-
-				fprintf($out, "\t%f\t%f\t%f\t%f", $d['agg'][$tkr]['in'] ?? 0, $d['agg'][$tkr]['out'] ?? 0, $num, $quote);
+		fprintf($out, "%d", $ts);
+		foreach($pf['lines'] as $tkr => $l) {
+			if(!isset($d['agg'][$tkr]) || !$d['agg'][$tkr]['qty']) {
+				$num = 0;
+				$quote = 0;
+			} else {
+				$used[$tkr] = true;
+				$num = $d['agg'][$tkr]['qty'];
+				$quote = get_quote($pf, $tkr, $ts);
 			}
-			fprintf($out, "\n");
+
+			fprintf($out, "\t%f\t%f\t%f\t%f", $d['agg'][$tkr]['in'] ?? 0, $d['agg'][$tkr]['out'] ?? 0, $num, $quote);
 		}
+
+		$bench = 0.0;
+		foreach($d['bagg'] as $tkr => $l) {
+			$bench += $l['qty'] * get_quote($pf, $tkr, $ts);
+		}
+		fprintf($out, "\t%f\n", $bench);
 	}
 }
 
-function plot_lines(array $pf, $start, $end, $absolute = true, $total = true) {
+function plot_lines(array &$pf, $start, $end, $lines = 'all', $absolute = true, $total = true, $benchmark = true) {
 	$dat = tempnam(sys_get_temp_dir(), 'pfm');
 	tsv_lines($pf, $datf = fopen($dat, 'wb'), $start, $end, $used);
 	fclose($datf);
@@ -108,7 +112,7 @@ function plot_lines(array $pf, $start, $end, $absolute = true, $total = true) {
 	fwrite($sf, "show grid\n");
 	fwrite($sf, "set key inside top left\n");
 
-	if(!$absolute) {
+	if(!$absolute && !$benchmark) {
 		fwrite($sf, "set yrange [0:*<100]\n");
 	}
 
@@ -124,8 +128,17 @@ function plot_lines(array $pf, $start, $end, $absolute = true, $total = true) {
 	}
 	$totstr = implode('+', $tot);
 
+
+	if($lines === 'none') {
+		$lines = [];
+	} else if($lines === 'all') {
+		$lines = array_flip(array_keys($pf['lines']));
+	} else {
+		$lines = array_flip(explode(',', $lines));
+	}
+
 	foreach($pf['lines'] as $tkr => $l) {
-		if(!isset($used[$tkr])) {
+		if(!isset($used[$tkr]) || !isset($lines[$tkr])) {
 			continue;
 		}
 
@@ -138,7 +151,10 @@ function plot_lines(array $pf, $start, $end, $absolute = true, $total = true) {
 	}
 
 	if($total) {
-		$plots[] = sprintf("'' using (column('Timestamp')):(%s) with lines title 'Total' linewidth 2", $absolute ? $totstr : '1.0');
+		$plots[] = sprintf("'%s' using (column('Timestamp')):(%s) with lines title 'Total' linewidth 2", $dat, $absolute ? $totstr : '100.0');
+	}
+	if($benchmark) {
+		$plots[] = sprintf("'%s' using (column('Timestamp')):(column('__bench__')/(%s)) with lines title 'Benchmark' linewidth 2", $dat, $absolute ? '1.0' : '0.01*('.$totstr.')');
 	}
 
 	fprintf($sf, "plot %s\n", implode(', ', $plots));

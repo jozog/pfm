@@ -12,9 +12,8 @@
  * @param $date a strtotime()-parseable date. If 'now', a real time
  * quote will be used. If not, the closing price of the day will be
  * fetched.
- * @returns a price or null if no price could be fetched
  */
-function get_quote(array &$pf, string $ticker, string $date = 'now'): ?float {
+function get_quote(array &$pf, string $ticker, string $date = 'now'): float {
 	if(!isset($pf['lines'][$ticker])) {
 		fatal("Unknown ticker %s\n", $ticker);
 	}
@@ -24,28 +23,35 @@ function get_quote(array &$pf, string $ticker, string $date = 'now'): ?float {
 	$date = maybe_strtotime($date);
 
 	if(date('Y-m-d', $date) === ($today = date('Y-m-d'))) {
-		return get_boursorama_rt_quote($isin);
+		$q = get_boursorama_rt_quote($isin);
+		if($q !== null) return $q;
+		fatal("could not find intraday quote for %s\n", $ticker);
 	}
 
 	$q = find_in_history($pf['hist'][$ticker] ?? [], $date);
 	if($q !== null) return $q;
 
-	$hist = get_boursorama_history($isin);
-	foreach($hist as $k => $v) {
-		$pf['hist'][$ticker][$k] = $v;
-	}
+	/* XXX */
+	$bdh = get_bd_history($isin, $ticker, $pf['lines'][$ticker]['currency']);
+
+	$pf['hist'][$ticker] = merge_histories(
+		$ticker,
+		$pf['hist'][$ticker],
+		$bdh
+	);
+
 	unset($pf['hist'][$ticker][$today]);
 	$q = find_in_history($pf['hist'][$ticker] ?? [], $date);
 	if($q !== null) return $q;
 
-	/* XXX: refactor me */
-	$hist = get_quantalys_hist($isin);
-	foreach($hist as $k => $v) {
-		$pf['hist'][$ticker][$k] = $v;
+	/* XXX */
+	$ydate = $date;
+	for($i = 0; $i < 2; ++$i) {
+		$q = find_in_history($pf['hist'][$ticker] ?? [], $ydate = prev_open_day(strtotime('-1 day', $ydate)));
+		if($q !== null) return $q;
 	}
-	unset($pf['hist'][$ticker][$today]);
-	$q = find_in_history($pf['hist'][$ticker] ?? [], $date);
-	if($q !== null) return $q;
+
+	fatal("could not find quote for %s at date %s\n", $ticker, date('Y-m-d', $date));
 }
 
 function get_curl(string $url) {
@@ -95,28 +101,39 @@ function get_boursorama_rt_quote($isin): ?float {
 		});
 }
 
-function get_boursorama_history(string $isin): array {
-	return get_cached_thing('brs-hist-'.$isin, strtotime('tomorrow'), function() use($isin): array {
-			$ticker = get_boursorama_ticker($isin);
-			if($ticker === null) return [];
-
-			$c = get_curl('https://www.boursorama.com/bourse/action/graph/ws/GetTicksEOD?'.http_build_query([
-				'symbol' => $ticker,
-				'length' => 7300,
-				'period' => 0,
-				'guid' => '',
-			]));
-			curl_setopt($c, CURLOPT_HTTPHEADER, [
-				'X-Requested-With: XMLHttpRequest',
-			]);
-			fwrite(STDOUT, '.');
-			$r = curl_exec($c);
-			$d = json_decode($r, true);
-
-			foreach($d['d']['QuoteTab'] as $row) {
-				$hist[gmdate('Y-m-d', 86400 * (int)$row['d'])] = (float)$row['c'];
+function get_bd_id(string $isin, string $ticker, string $currency): ?array {
+	return get_cached_thing('bd-id-'.$isin, -31557600, function() use($isin, $ticker, $currency): ?array {
+		$c = get_curl('https://www.boursedirect.fr/api/search/'.$isin);
+		fwrite(STDOUT, '.');
+		curl_setopt($c, CURLOPT_HTTPHEADER, [
+			'X-Requested-With: XMLHttpRequest',
+		]);
+		$d = json_decode(curl_exec($c), true);
+		foreach($d['instruments']['data'] as $inst) {
+			if($inst['currency']['code'] === $currency && $inst['isin'] === $isin && $inst['mnemo'] === $ticker) {
+				return [ $inst['mnemo'], $inst['currency']['code'], $inst['market']['mic'] ];
 			}
+		}
+		return null;
+	});
+}
 
+function get_bd_history(string $isin, string $ticker, string $currency): array {
+	return get_cached_thing('bd-hist-'.$isin, strtotime('tomorrow'), function() use($isin, $ticker, $currency): array {
+			$id = get_bd_id($isin, $ticker, $currency);
+			if($id === null) return [];
+			$c = get_curl('https://www.boursedirect.fr/api/instrument/download/history/'.$id[2].'/'.$id[0].'/'.$id[1]);
+			fwrite(STDOUT, '.');
+			$csv = curl_exec($c);
+			$csv = explode("\n", trim($csv));
+			array_shift($csv);
+			$hist = [];
+			foreach($csv as $line) {
+				list($date,,,, $close) = explode(';', $line);
+				if($close === '') continue;
+
+				$hist[date('Y-m-d', strtotime(substr($date, 1, -1)))] = floatval($close);
+			}
 			return $hist;
 		});
 }
@@ -181,73 +198,15 @@ function find_in_history(array $hist, int $ts): ?float {
 	return $hist[date('Y-m-d', prev_open_day($ts))] ?? null;
 }
 
-function get_quantalys_id(string $isin): int {
-	return get_cached_thing('quantalys-id-'.$isin, -31557600, function() use($isin): ?int {
-			$c = get_curl('https://www.quantalys.com/Recherche/RechercheRapide');
-			curl_setopt($c, CURLOPT_POSTFIELDS, [ 'inputSearch' => $isin ]);
-			if(curl_exec($c) === false) return null;
-			$uri = curl_getinfo($c, CURLINFO_EFFECTIVE_URL);
-			if(!preg_match('%^https://www\.quantalys\.com/Fonds/(?<id>[0-9]+)$%', $uri, $m)) return null;
-			return (int)$m['id'];
-		});
-}
-
-function get_quantalys_hist(string $isin): array {
-	return get_cached_thing('quantalys-hist-'.$isin, strtotime('tomorrow'), function() use($isin): array {
-			$id = get_quantalys_id($isin);
-			if($id === null) return [];
-
-			$c = get_curl('https://www.quantalys.com/Fonds/GetDefaultCourbes');
-			curl_setopt($c, CURLOPT_POSTFIELDS, [ 'ID_Produit' => $id ]);
-			$json = curl_exec($c);
-			if($json === false || ($json = json_decode($json, true)) === false) return [];
-			assert($json['list']['Data'][0]['ID'] === $id);
-
-			$c = get_curl('https://www.quantalys.com/Fonds/GetChartHisto_Historique');
-			curl_setopt($c, CURLOPT_POSTFIELDS, [
-				'ID_Produit' => $id,
-				'jsonListeCourbes' => json_encode([
-					[
-						'ID' => $id,
-						'Nom' => urlencode($json['list']['Data'][0]['Nom']),
-						'Type' => 1,
-						'Color' => '#0A50A1',
-						'FinancialItem' => [
-							'ID_Produit' => $id,
-							'cTypeFinancialItem' => 1,
-							'cClasseFinancialItem' => 0,
-							'nModeCalcul' => 1,
-						]
-					]
-				]),
-				'sDtEnd' => $json['dtEnd'],
-				'sDtStart' => $json['dtStart'],
-			]);
-			$json = curl_exec($c);
-			if($json === false || ($json = json_decode($json, true)) === false) return [];
-
-			$c = get_curl('https://www.quantalys.com/Fonds/'.$id);
-			$html = curl_exec($c);
-			if($html === false) return [];
-			if(!preg_match('%<span Class="vl-box-value">\s*(?<vl>[0-9,]+)\s+(?<cur>[A-Z]+)\s*</span>%', $html, $mvl)) return false;
-			if(!preg_match('%<span Class="vl-box-date">\s*(?<date>[0-9/]+)\s*</span>%', $html, $md)) return false;
-
-			$vl = floatval(str_replace(',', '.', $mvl['vl']));
-			$vld = explode('/', $md['date']);
-			$vld = gmdate('Y-m-d', gmmktime(0, 0, 0, (int)$vld[1], (int)$vld[0], (int)$vld[2]));
-
-			$hist = [];
-			$data = json_decode($json['graph'], true)['dataProvider'];
-			foreach($data as $v) {
-				$hist[gmdate('Y-m-d', strtotime($v['x']))] = floatval($v['y_0']);
-			}
-
-			assert(isset($hist[$vld]));
-			$factor = $vl / $hist[$vld];
-			foreach($hist as $k => &$v) {
-				$v = round($factor * $v, 2);
-			}
-
-			return $hist;
-		});
+function merge_histories(string $ticker, array $h1, array $h2): array {
+	$h = $h1 + $h2;
+	ksort($h);
+	foreach($h as $k => $v) {
+		if(!isset($h1[$k]) || !isset($h2[$k])) continue;
+		$delta = abs(($h2[$k] - $h1[$k]) / $h1[$k]);
+		if($delta > 0.001) {
+			notice("possible history mismatch for %s at %s: %.4f ≠ %.4f\n", $ticker, $k, $h1[$k], $h2[$k]);
+		}
+	}
+	return $h;
 }

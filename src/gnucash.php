@@ -67,36 +67,35 @@ function insert_gnucash_quotes(array &$pf, \DOMDocument $d): void {
 	assert($p->getAttribute('version') === '1');
 
 	$frag = $d->createDocumentFragment();
-	$start = PHP_INT_MAX;
-	foreach($pf['tx'] as $tx) {
-		if($tx['ts'] < $start) $start = $tx['ts'];
-	}
-	foreach(iterate_time($pf, $start, time(), '+1 day') as $date => $data) {
-		foreach($data['agg'] as $ticker => $agg) {
-			if(!isset($commodities[$ticker])) continue;
-			if($agg['qty'] < 0.0001) { /* XXX */
-				continue;
-			}
+	$today = date('Y-m-d', time());
+	$agg = aggregate_tx($pf);
 
-			list($space, $id) = $commodities[$ticker];
-			$quote = get_quote($pf, $ticker, $date);
-			if($quote === null) continue;
+	/* XXX: not optimal at all */
+	foreach($commodities as $ticker => list($space, $id)) {
+		$hist = $pf['hist'][$ticker] ?? [];
 
+		if($agg[$ticker]['qty'] > 1e-5) {
+			$hist[$today] = get_quote($pf, $ticker);
+		}
+
+		foreach($hist as $ymd => $q) {
+			if($q === null) continue;
 			$frag->appendXML(sprintf(
-				'<price xmlns:price="http://www.gnucash.org/XML/price" xmlns:cmdty="http://www.gnucash.org/XML/cmdty" xmlns:ts="http://www.gnucash.org/XML/ts"><price:id type="guid">%s</price:id><price:commodity><cmdty:space>%s</cmdty:space><cmdty:id>%s</cmdty:id></price:commodity><price:currency><cmdty:space>CURRENCY</cmdty:space><cmdty:id>%s</cmdty:id></price:currency><price:time><ts:date>%s</ts:date></price:time><price:source>user:price-editor</price:source><price:type>unknown</price:type><price:value>%d/%d</price:value></price>',
-				'pfm-'.$ticker.'-'.$date,
+				'<price xmlns:price="http://www.gnucash.org/XML/price" xmlns:cmdty="http://www.gnucash.org/XML/cmdty" xmlns:ts="http://www.gnucash.org/XML/ts"><price:id type="guid">%s</price:id><price:commodity><cmdty:space>%s</cmdty:space><cmdty:id>%s</cmdty:id></price:commodity><price:currency><cmdty:space>CURRENCY</cmdty:space><cmdty:id>%s</cmdty:id></price:currency><price:time><ts:date>%s</ts:date></price:time><price:source>user:price-editor</price:source><price:type>nav</price:type><price:value>%d/%d</price:value></price>',
+				'pfm-'.$ticker.'-'.$ymd,
 				$space,
 				$id,
 				$pf['lines'][$ticker]['currency'],
-				gmdate('Y-m-d', $date).' 00:00:00 +0000',
-				(int)($quote * 1000), 1000
+				$ymd.' 00:00:00 +0000',
+				(int)($q * 1000), 1000
 			));
 		}
 	}
 
 	$xp = new \DOMXPath($d);
 	/* Only remove price entries for things we will replace */
-	$rm = $xp->query('//gnc:pricedb/price/price:id[starts-with(text(),"pfm-")]/..');
+	/* https://github.com/Gnucash/gnucash/blob/master/libgnucash/doc/xml/gnucash-v2.rnc */
+	$rm = $xp->query('//gnc:pricedb/price/price:type[text()="nav"]/..'); /* XXX: nav type doesn't perfectly identify prices added by pfm */
 	for($i = 0; $i < $rm->length; ++$i) {
 		if($rm->item($i)->parentNode === null) continue;
 		$rm->item($i)->parentNode->removeChild($rm->item($i));

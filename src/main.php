@@ -41,7 +41,7 @@ case 's':
 
 case 'perf':
 case 'p':
-	perf($pf, $args['at'] ?? 'now', $args['columns'] ?? 'default');
+	perf($pf, $args['type'] ?? 'irr', $args['at'] ?? 'now', $args['columns'] ?? 'default', $args['rows'] ?? 'open', $args['sort'] ?? 'perf');
 	break;
 
 case 'add-line':
@@ -122,7 +122,7 @@ case 'plot-gains':
 	break;
 
 case 'plot-lines':
-	plot_lines($pf, $args['start'] ?? '-2 years', $args['end'] ?? 'now', $args['absolute'] ?? true, $args['total'] ?? true);
+	plot_lines($pf, $args['start'] ?? '-2 years', $args['end'] ?? 'now', $args['lines'] ?? 'all', $args['absolute'] ?? true, $args['total'] ?? true, $args['benchmark'] ?? true);
 	break;
 
 case 'get-quote':
@@ -144,6 +144,49 @@ case 'quotes-to-gnucash':
 	save_gnucash($args[0], $d);
 	break;
 
+case 'prune-history':
+	$from = maybe_strtotime($args['from'] ?? 0);
+	$to = maybe_strtotime($args['to'] ?? PHP_INT_MAX);
+	$tickers = explode(',', $args['tickers'] ?? '');
+	if($tickers === [ '' ]) $tickers = array_keys($pf['lines']);
+	$except = array_flip(explode(',', $args['except'] ?? ''));
+	$pruned = 0;
+
+	foreach($tickers as $ticker) {
+		if(isset($except[$ticker])) continue;
+		if(!isset($pf['hist'][$ticker])) continue;
+
+		foreach($pf['hist'][$ticker] as $k => $v) {
+			$ts = strtotime($k);
+			if($ts >= $from && $ts <= $to) {
+				unset($pf['hist'][$ticker][$k]);
+				++$pruned;
+			}
+		}
+	}
+
+	notice("Done, pruned %d entries from history\n", $pruned);
+	break;
+
+case 'set-benchmark':
+	$s = 0.0;
+	foreach($args as $ticker => &$weight) {
+		if(!isset($pf['lines'][$ticker])) {
+			fatal("Unknown ticker %s\n", $ticker);
+		}
+		$weight = floatval($weight);
+		$s += $weight;
+	}
+	if($args !== []) {
+		if(abs($s - 1.0) >= 0.0001) {
+			notice("Warning: benchmark weights do not add up to 1.0 (have %.4f)\n", $s);
+		}
+		$pf['benchmark'] = $args;
+	} else {
+		unset($pf['benchmark']);
+	}
+	break;
+
 case 'version':
 case '-v':
 case '--version':
@@ -163,7 +206,7 @@ case '--help':
 	fwrite(STDERR, "pfm [version]\n");
 	fwrite(STDERR, "pfm help|h\n");
 	fwrite(STDERR, "pfm status|s [at:<date>]\n");
-	fwrite(STDERR, "pfm perf|p [at:<date>] [columns:default|days|weeks|months|years]\n");
+	fwrite(STDERR, "pfm perf|p [type:irr|pnl] [at:<date>] [columns:default|days|weeks|months|years] [rows:all|open|ticker1,ticker2…] [sort:perf|weight|ticker]\n");
 	fwrite(STDERR, "pfm add-line name:<name> ticker:<ticker> currency:<currency> isin:<ISIN>\n");
 	fwrite(STDERR, "pfm rm-line ticker:<ticker>\n");
 	fwrite(STDERR, "pfm edit-line ticker:<ticker> [<field1>:<newval1>] [<field2>:<newval2>]…\n");
@@ -173,8 +216,10 @@ case '--help':
 	fwrite(STDERR, "pfm ls-tx [ticker:<ticker>] [before:<date>] [after:<date>]\n");
 	fwrite(STDERR, "pfm get-quote ticker:<ticker> [at:<date>]\n");
 	fwrite(STDERR, "pfm plot-gains [start:<date>] [end:<date>] [absolute:1|0]\n");
-	fwrite(STDERR, "pfm plot-lines [start:<date>] [end:<date>] [absolute:1|0] [total:1|0]\n");
+	fwrite(STDERR, "pfm plot-lines [start:<date>] [end:<date>] [absolute:1|0] [lines:all|none|ticker1,ticker2,…] [total:1|0] [benchmark:1|0]\n");
 	fwrite(STDERR, "pfm quotes-to-gnucash <file.gnucash>\n");
+	fwrite(STDERR, "pfm prune-history [tickers:<ticker>,…] [except:<ticker>,…] [from:<date>] [to:<date>]\n");
+	fwrite(STDERR, "pfm set-benchmark [<ticker1>:<weight1>] [<ticker2>:<weight2>] …\n");
 	break;
 
 default:
